@@ -109,8 +109,10 @@ function renderOnboarding(step) {
       <div class="onb-step">
         <div class="progress-dots"><span class="on"></span><span></span></div>
         <div class="big-emoji">🌱</div>
-        <h1>このアプリに、<br>始める前の過去は入れられません</h1>
-        <p>きょう(${todayStr().replaceAll("-", "/")})より前の記録は、この先ずっと入力できません。</p>
+        <h1>めぐる家計簿</h1>
+        <p style="color:var(--text); font-weight:600;">とりあえず「続ける」ための家計簿です。</p>
+        <p>金額は入力しません。なに買ったかをタップするだけで、だいたいの金額をアプリが勝手に記録します。正確さより、記録がめぐり続けることを大事にします。</p>
+        <p style="color:var(--text); font-weight:600; margin-top:18px;">ルールはひとつだけ:きょう(${todayStr().replaceAll("-", "/")})より前の過去は入れられません。</p>
         <p>忘れた日があっても大丈夫。さかのぼって完璧にするより、ざっくりでも続いた人が勝ちです。</p>
         <div class="onb-actions">
           <button class="primary full" id="onb-next">今日からはじめる</button>
@@ -182,7 +184,7 @@ function topbarHtml(title) {
 }
 
 function renderInput() {
-  app.innerHTML = topbarHtml("きろく") + `<p class="muted">なに買った?(タップだけ)</p><div class="genre-grid" id="grid"></div>`;
+  app.innerHTML = topbarHtml("めぐる家計簿") + `<p class="muted">なに買った?(タップだけ)</p><div class="genre-grid" id="grid"></div>`;
   const grid = document.getElementById("grid");
   GENRES.forEach((genre) => {
     const b = document.createElement("button");

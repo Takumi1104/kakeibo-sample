@@ -1,6 +1,7 @@
 {
-  "name": "きろく — 続く家計簿",
-  "short_name": "きろく",
+  "name": "めぐる家計簿 — とりあえず続けるための家計簿",
+  "short_name": "めぐる家計簿",
+  "description": "金額を入力しない、とりあえず続けるための家計簿。なに買ったかをタップするだけ。",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#faf9f5",
