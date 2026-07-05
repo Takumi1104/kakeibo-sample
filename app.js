@@ -102,12 +102,64 @@ function render() {
 /* ---------- onboarding ---------- */
 let onbFixed = {};
 
+function isStandalone() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function dotsHtml(step) {
+  const total = isStandalone() ? 2 : 3;
+  let h = '<div class="progress-dots">';
+  for (let i = 1; i <= total; i++) h += `<span${i <= step ? ' class="on"' : ""}></span>`;
+  return h + "</div>";
+}
+
+function finishOnboarding() {
+  state = {
+    start: todayStr(),
+    fixed: FIXED_PRESETS.map((f) => ({ id: f.id, label: f.label.split("(")[0], amount: onbFixed[f.id] || 0 })),
+    learned: {},
+    records: [],
+    goal: 3,
+  };
+  save();
+  currentTab = "input";
+  render();
+}
+
+const GUIDE_STEPS = `
+  <p class="sub" style="margin:12px 0 4px; font-weight:600;">iPhone(Safari)での手順</p>
+  <ol style="padding-left:22px; font-size:15px; color:var(--sub); line-height:2;">
+    <li>画面下の共有ボタン(□から↑のマーク)をタップ</li>
+    <li>「ホーム画面に追加」を選ぶ</li>
+    <li>右上の「追加」をタップ</li>
+  </ol>
+  <p class="muted" style="margin-top:10px;">LINEやインスタの中から開いている場合は、いったんSafariで開き直してください。AndroidはChromeのメニュー(⋮)→「ホーム画面に追加」です。</p>`;
+
+function openInstallGuide() {
+  modalRoot.innerHTML = `
+    <div class="modal-bg" id="ig-bg">
+      <div class="modal">
+        <h2>ホーム画面に追加する</h2>
+        <p class="sub" style="margin-top:6px;">アプリみたいに1タップで開けるようになります。</p>
+        ${GUIDE_STEPS}
+        <div class="modal-actions">
+          <button class="primary" id="ig-close">とじる</button>
+        </div>
+      </div>
+    </div>`;
+  const close = () => (modalRoot.innerHTML = "");
+  document.getElementById("ig-bg").addEventListener("click", (e) => {
+    if (e.target.id === "ig-bg") close();
+  });
+  document.getElementById("ig-close").addEventListener("click", close);
+}
+
 function renderOnboarding(step) {
   tabbar.classList.add("hidden");
   if (step === 1) {
     app.innerHTML = `
       <div class="onb-step">
-        <div class="progress-dots"><span class="on"></span><span></span></div>
+        ${dotsHtml(1)}
         <div class="big-emoji">🌱</div>
         <h1>めぐる家計簿</h1>
         <p style="color:var(--text); font-weight:600;">とりあえず「続ける」ための家計簿です。</p>
@@ -119,10 +171,10 @@ function renderOnboarding(step) {
         </div>
       </div>`;
     document.getElementById("onb-next").addEventListener("click", () => renderOnboarding(2));
-  } else {
+  } else if (step === 2) {
     app.innerHTML = `
       <div class="onb-step">
-        <div class="progress-dots"><span class="on"></span><span class="on"></span></div>
+        ${dotsHtml(2)}
         <div class="big-emoji">🏠</div>
         <h1>毎月かかるお金を<br>ざっくり教えてください</h1>
         <p>家賃や光熱費など。正確じゃなくてOK、あとで変えられます。かからないものは「なし」のままで。</p>
@@ -152,17 +204,24 @@ function renderOnboarding(step) {
       wrap.appendChild(div);
     });
     document.getElementById("onb-done").addEventListener("click", () => {
-      state = {
-        start: todayStr(),
-        fixed: FIXED_PRESETS.map((f) => ({ id: f.id, label: f.label.split("(")[0], amount: onbFixed[f.id] || 0 })),
-        learned: {},
-        records: [],
-        goal: 3,
-      };
-      save();
-      currentTab = "input";
-      render();
+      if (isStandalone()) finishOnboarding();
+      else renderOnboarding(3);
     });
+  } else {
+    app.innerHTML = `
+      <div class="onb-step">
+        ${dotsHtml(3)}
+        <div class="big-emoji">📲</div>
+        <h1>ホーム画面に追加しよう</h1>
+        <p>続けるコツは、買った直後に1タップで開けること。このページはアプリとしてホーム画面に置けます。</p>
+        ${GUIDE_STEPS}
+        <div class="onb-actions">
+          <button class="primary full" id="onb-installed">追加できた!はじめる</button>
+          <button class="ghost full" id="onb-later">あとでやる(このまま使う)</button>
+        </div>
+      </div>`;
+    document.getElementById("onb-installed").addEventListener("click", finishOnboarding);
+    document.getElementById("onb-later").addEventListener("click", finishOnboarding);
   }
 }
 
@@ -184,7 +243,18 @@ function topbarHtml(title) {
 }
 
 function renderInput() {
-  app.innerHTML = topbarHtml("めぐる家計簿") + `<p class="muted">なに買った?(タップだけ)</p><div class="genre-grid" id="grid"></div>`;
+  const showHint = !isStandalone() && !state.hideInstallHint;
+  app.innerHTML =
+    topbarHtml("めぐる家計簿") +
+    `<p class="muted">なに買った?(タップだけ)</p><div class="genre-grid" id="grid"></div>` +
+    (showHint
+      ? `<div class="card" style="display:flex; align-items:center; gap:10px; margin-top:18px;">
+          <span style="font-size:22px;">📲</span>
+          <span style="flex:1; font-size:13px; color:var(--sub);">ホーム画面に追加すると、買った直後に1タップで記録できます</span>
+          <button id="hint-guide" style="font-size:13px; padding:8px 12px; flex:0 0 auto;">手順</button>
+          <button id="hint-close" class="ghost" style="padding:4px; font-size:14px; flex:0 0 auto;" aria-label="閉じる">✕</button>
+        </div>`
+      : "");
   const grid = document.getElementById("grid");
   GENRES.forEach((genre) => {
     const b = document.createElement("button");
@@ -192,6 +262,14 @@ function renderInput() {
     b.addEventListener("click", () => renderScenes(genre));
     grid.appendChild(b);
   });
+  if (showHint) {
+    document.getElementById("hint-guide").addEventListener("click", openInstallGuide);
+    document.getElementById("hint-close").addEventListener("click", () => {
+      state.hideInstallHint = true;
+      save();
+      renderInput();
+    });
+  }
 }
 
 function renderScenes(genre) {
@@ -413,6 +491,13 @@ function renderSettings() {
 
   app.innerHTML =
     topbarHtml("せってい") +
+    (!isStandalone()
+      ? `<div class="card">
+      <h2>ホーム画面に追加</h2>
+      <p class="muted" style="margin-bottom:12px;">アプリみたいに1タップで開けるようになります</p>
+      <button class="full" id="btn-guide">手順を見る</button>
+    </div>`
+      : "") +
     `<div class="card">
       <h2>毎月の固定費(ざっくり)</h2>
       <p class="muted" style="margin-bottom:12px;">きろく帳の合計に足されます</p>
@@ -449,6 +534,7 @@ function renderSettings() {
     list.appendChild(row);
   });
 
+  if (!isStandalone()) document.getElementById("btn-guide").addEventListener("click", openInstallGuide);
   document.getElementById("btn-export").addEventListener("click", () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
