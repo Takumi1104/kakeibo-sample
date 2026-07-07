@@ -1,5 +1,9 @@
 const STORE_KEY = "kakeibo-v1";
 
+// Web Push（Cloudflare Worker）
+const PUSH_API = "https://kakeibo-push.vt5cdrb5st.workers.dev";
+const VAPID_PUBLIC = "BNkdqaYsCs1Qr013_uA_bsHdciMvTpsUNAAZLupC86DQMV3pr6iClrNOlEDA_Vauju7HTBrHEIg0EBPnT_lXOlM";
+
 const GENRES = [
   { g: "飲み物", emoji: "🥤", scenes: [["自販機", 200], ["コンビニ", 190], ["カフェ", 500]] },
   { g: "ごはん", emoji: "🍜", scenes: [["昼ごはん", 700], ["夜ごはん", 1000], ["外食", 1500], ["コンビニ", 650], ["飲み会", 4500]] },
@@ -126,6 +130,64 @@ function finishOnboarding() {
   render();
 }
 
+/* ---------- push notifications ---------- */
+function pushSupported() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+
+function urlB64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function enableNotifications(time) {
+  if (!pushSupported()) throw new Error("unsupported");
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("denied");
+  const reg = await navigator.serviceWorker.register("sw.js");
+  await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8Array(VAPID_PUBLIC),
+    });
+  }
+  const res = await fetch(PUSH_API + "/subscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      subscription: sub.toJSON(),
+      time,
+      tzOffset: new Date().getTimezoneOffset(),
+    }),
+  });
+  if (!res.ok) throw new Error("server");
+  state.notify = { enabled: true, time };
+  save();
+}
+
+async function disableNotifications() {
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && (await reg.pushManager.getSubscription());
+    if (sub) {
+      await fetch(PUSH_API + "/unsubscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      }).catch(() => {});
+      await sub.unsubscribe().catch(() => {});
+    }
+  } catch (e) {}
+  state.notify = { enabled: false, time: (state.notify && state.notify.time) || "21:00" };
+  save();
+}
+
 const GUIDE_STEPS = `
   <p class="sub" style="margin:12px 0 4px; font-weight:600;">iPhone(Safari)での手順</p>
   <ol style="padding-left:22px; font-size:15px; color:var(--sub); line-height:2;">
@@ -242,19 +304,33 @@ function topbarHtml(title) {
   return `<div class="topbar"><h1>${title}</h1><span class="streak-chip">今週 ${done}/${state.goal}日${hit}</span></div>`;
 }
 
+function installBoxHtml() {
+  if (isStandalone() || state.hideInstallHint) return "";
+  return `<div class="install-box" id="installBox">
+      <button id="hint-close" aria-label="閉じる">✕</button>
+      <div style="font-weight:600; margin-bottom:4px; padding-right:22px;">📲 ホーム画面に追加すると、買った直後に1タップで記録できます</div>
+      <div style="font-size:12.5px; line-height:1.8;">iPhone：Safariで開く → 共有ボタン(□↑) →「ホーム画面に追加」<br>Android：ブラウザのメニュー(⋮) →「ホーム画面に追加」</div>
+      <button id="hint-guide" class="install-guide-btn">くわしい手順を見る</button>
+    </div>`;
+}
+
+function wireInstallBox(rerender) {
+  const g = document.getElementById("hint-guide");
+  const c = document.getElementById("hint-close");
+  if (g) g.addEventListener("click", openInstallGuide);
+  if (c)
+    c.addEventListener("click", () => {
+      state.hideInstallHint = true;
+      save();
+      rerender();
+    });
+}
+
 function renderInput() {
-  const showHint = !isStandalone() && !state.hideInstallHint;
   app.innerHTML =
     topbarHtml("めぐる家計簿") +
-    `<p class="muted">なに買った?(タップだけ)</p><div class="genre-grid" id="grid"></div>` +
-    (showHint
-      ? `<div class="card" style="display:flex; align-items:center; gap:10px; margin-top:18px;">
-          <span style="font-size:22px;">📲</span>
-          <span style="flex:1; font-size:13px; color:var(--sub);">ホーム画面に追加すると、買った直後に1タップで記録できます</span>
-          <button id="hint-guide" style="font-size:13px; padding:8px 12px; flex:0 0 auto;">手順</button>
-          <button id="hint-close" class="ghost" style="padding:4px; font-size:14px; flex:0 0 auto;" aria-label="閉じる">✕</button>
-        </div>`
-      : "");
+    installBoxHtml() +
+    `<p class="muted">なに買った?(タップだけ)</p><div class="genre-grid" id="grid"></div>`;
   const grid = document.getElementById("grid");
   GENRES.forEach((genre) => {
     const b = document.createElement("button");
@@ -262,14 +338,7 @@ function renderInput() {
     b.addEventListener("click", () => renderScenes(genre));
     grid.appendChild(b);
   });
-  if (showHint) {
-    document.getElementById("hint-guide").addEventListener("click", openInstallGuide);
-    document.getElementById("hint-close").addEventListener("click", () => {
-      state.hideInstallHint = true;
-      save();
-      renderInput();
-    });
-  }
+  wireInstallBox(renderInput);
 }
 
 function renderScenes(genre) {
@@ -489,6 +558,32 @@ function renderSettings() {
     .map((k) => `<div class="summary-row"><span>${k.replace("/", "・")}</span><span>だいたい ${yen(roundRough(state.learned[k]))}</span></div>`)
     .join("");
 
+  const notify = state.notify || { enabled: false, time: "21:00" };
+  const notifCard = (() => {
+    if (!pushSupported()) {
+      return `<div class="card">
+      <h2>リマインダー通知</h2>
+      <p class="muted" style="margin-bottom:10px;">毎日きめた時間に「きろくつけた?」をお知らせします。この機能は<b>ホーム画面に追加したアプリ</b>でのみ使えます。</p>
+      <button class="full" id="btn-guide2">ホーム画面に追加する手順</button>
+    </div>`;
+    }
+    return `<div class="card">
+      <h2>リマインダー通知</h2>
+      <p class="muted" style="margin-bottom:12px;">毎日きめた時間に「きろくつけた?」をお知らせします</p>
+      <div class="toggle-row">
+        <span class="lbl">通知を受け取る</span>
+        <button class="switch ${notify.enabled ? "on" : ""}" id="notif-switch" role="switch" aria-checked="${notify.enabled}" aria-label="通知のオンオフ"></button>
+      </div>
+      <div class="time-row" id="notif-time-row" style="${notify.enabled ? "" : "display:none;"}">
+        <span class="muted">時間</span>
+        <input type="time" id="notif-time" value="${notify.time}" step="300">
+        <button id="notif-time-save" style="font-size:13px; padding:8px 12px;">保存</button>
+      </div>
+      <button id="notif-test" class="full" style="margin-top:10px; font-size:13px; display:${notify.enabled ? "block" : "none"};">テスト通知を送る</button>
+      <p class="muted" id="notif-status" style="margin-top:10px;"></p>
+    </div>`;
+  })();
+
   app.innerHTML =
     topbarHtml("せってい") +
     (!isStandalone()
@@ -498,6 +593,7 @@ function renderSettings() {
       <button class="full" id="btn-guide">手順を見る</button>
     </div>`
       : "") +
+    notifCard +
     `<div class="card">
       <h2>毎月の固定費(ざっくり)</h2>
       <p class="muted" style="margin-bottom:12px;">きろく帳の合計に足されます</p>
@@ -535,6 +631,82 @@ function renderSettings() {
   });
 
   if (!isStandalone()) document.getElementById("btn-guide").addEventListener("click", openInstallGuide);
+  const btnGuide2 = document.getElementById("btn-guide2");
+  if (btnGuide2) btnGuide2.addEventListener("click", openInstallGuide);
+
+  const sw = document.getElementById("notif-switch");
+  if (sw) {
+    const statusEl = document.getElementById("notif-status");
+    const timeRow = document.getElementById("notif-time-row");
+    sw.addEventListener("click", async () => {
+      const turningOn = !sw.classList.contains("on");
+      if (turningOn) {
+        statusEl.textContent = "通知を設定中…";
+        const time = (document.getElementById("notif-time") || {}).value || notify.time || "21:00";
+        try {
+          await enableNotifications(time);
+          sw.classList.add("on");
+          sw.setAttribute("aria-checked", "true");
+          timeRow.style.display = "";
+          const tb = document.getElementById("notif-test");
+          if (tb) tb.style.display = "block";
+          statusEl.textContent = `毎日 ${time} にお知らせします`;
+        } catch (e) {
+          const msg =
+            e.message === "denied"
+              ? "通知が許可されませんでした。端末の設定から許可してください。"
+              : e.message === "unsupported"
+              ? "この端末では通知を使えません。ホーム画面に追加したアプリで開いてください。"
+              : "設定に失敗しました。少し待って試してください。";
+          statusEl.textContent = msg;
+        }
+      } else {
+        statusEl.textContent = "解除中…";
+        await disableNotifications();
+        sw.classList.remove("on");
+        sw.setAttribute("aria-checked", "false");
+        timeRow.style.display = "none";
+        const tb = document.getElementById("notif-test");
+        if (tb) tb.style.display = "none";
+        statusEl.textContent = "通知をオフにしました";
+      }
+    });
+    const saveBtn = document.getElementById("notif-time-save");
+    if (saveBtn)
+      saveBtn.addEventListener("click", async () => {
+        const time = document.getElementById("notif-time").value || "21:00";
+        statusEl.textContent = "保存中…";
+        try {
+          await enableNotifications(time);
+          statusEl.textContent = `毎日 ${time} にお知らせします`;
+        } catch (e) {
+          statusEl.textContent = "保存に失敗しました。";
+        }
+      });
+    const testBtn = document.getElementById("notif-test");
+    if (testBtn)
+      testBtn.addEventListener("click", async () => {
+        statusEl.textContent = "テスト送信中…";
+        try {
+          const reg = await navigator.serviceWorker.getRegistration();
+          const sub = reg && (await reg.pushManager.getSubscription());
+          if (!sub) throw new Error("no sub");
+          const res = await fetch(PUSH_API + "/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: sub.endpoint }),
+          });
+          statusEl.textContent = res.ok ? "送りました。数秒で通知が届きます📩" : "送信に失敗しました。";
+        } catch (e) {
+          statusEl.textContent = "送信できませんでした。通知をオンにしてから試してください。";
+        }
+      });
+    if (sw.classList.contains("on")) {
+      const t = document.getElementById("notif-test");
+      if (t) t.style.display = "block";
+    }
+  }
+
   document.getElementById("btn-export").addEventListener("click", () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
